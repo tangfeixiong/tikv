@@ -208,7 +208,7 @@ impl FilterFactory for Isolate {
                         }];
         }
         vec![box PartitionFilter {
-                 node_ids: vec![node_id],
+                 node_ids: vec![self.node_id],
                  drop: AtomicBool::new(false),
              }]
     }
