@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
+use std::time::Instant;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use rocksdb::rocksdb::Snapshot;
@@ -299,21 +300,37 @@ impl Peer {
             return Ok(None);
         }
 
+        let timer = Instant::now();
+
         debug!("handle raft ready: peer {:?}, region {}",
                self.peer,
                self.region_id);
 
         let ready = self.raft_group.ready();
+        let build_ready = Instant::now();
 
         let apply_result = try!(self.storage.wl().handle_raft_ready(&ready));
+        let storage_ready = Instant::now();
 
         for msg in &ready.messages {
             try!(self.send_raft_message(&msg, trans));
         }
+        let send_msg = Instant::now();
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
+        let handle_committed = Instant::now();
 
         self.raft_group.advance(ready);
+        let dur = timer.elapsed();
+        if dur.as_secs() > 1 {
+            warn!("peer {} handle ready takes too slow: [build: {:?}, storage: {:?}, send: {:?}, \
+                   handle: {:?}]",
+                  self.peer_id(),
+                  build_ready - timer,
+                  storage_ready - build_ready,
+                  send_msg - storage_ready,
+                  handle_committed - send_msg);
+        }
         Ok(Some(ReadyResult {
             apply_snap_result: apply_result,
             exec_results: exec_results,
