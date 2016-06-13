@@ -87,6 +87,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 {
     // We use base raft tick as the event loop timer tick.
     let mut builder = EventLoopBuilder::new();
+    builder.notify_capacity(40960);
     builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval));
     let event_loop = try!(builder.build());
     Ok(event_loop)
