@@ -15,7 +15,8 @@
 use std::panic::{self, PanicInfo};
 use std::cell::RefCell;
 use std::sync::{Once, ONCE_INIT};
-use std::process;
+use std::process::{self, Command};
+use libc;
 
 
 /// A simple panic hook that allows skiping printing stacktrace conditionaly.
@@ -66,6 +67,14 @@ pub fn set_exit_hook() {
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &PanicInfo| {
         orig_hook(info);
+        match Command::new("ls")
+            .arg("-alh")
+            .arg(format!("/proc/{}/fd/", unsafe { libc::getpid() }))
+            .spawn()
+            .and_then(|mut child| child.wait()) {
+            Ok(status) => error!("ls exis with status: {}", status),
+            Err(e) => error!("failed to list open files: {:?}", e),
+        }
         process::exit(1);
     })
 }
