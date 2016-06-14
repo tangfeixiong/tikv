@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 use rocksdb::{DB, WriteBatch, Writable};
 use rocksdb::rocksdb::Snapshot;
@@ -322,7 +322,7 @@ impl Peer {
 
         self.raft_group.advance(ready);
         let dur = timer.elapsed();
-        if dur.as_secs() > 1 {
+        if dur > Duration::from_millis(50) {
             warn!("peer {} handle ready takes too slow: [build: {:?}, storage: {:?}, send: {:?}, \
                    handle: {:?}]",
                   self.peer_id(),
