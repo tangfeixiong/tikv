@@ -12,10 +12,9 @@
 // limitations under the License.
 
 use std::sync::{Arc, RwLock};
-use std::time::{self, Duration, Instant};
+use std::time;
 use std::thread;
 use std::vec::Vec;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rand;
@@ -217,137 +216,24 @@ impl FilterFactory for Isolate {
     }
 }
 
-struct MockForCheck {
-    // <node_id, msg_count>
-    routers: RwLock<HashMap<u64, u64>>,
-}
-
-impl MockForCheck {
-    fn new(count: usize) -> MockForCheck {
-        let mut hash: HashMap<u64, u64> = HashMap::new();
-        for i in 0..count {
-            hash.insert(i as u64, 0);
-        }
-        MockForCheck { routers: RwLock::new(hash) }
+#[test]
+fn test_isolate() {
+    let filter_factory = Isolate::new(3);
+    let filter3 = filter_factory.generate(3);
+    // isolate node can't send out message
+    for to in 0..1000 {
+        let mut msg = RaftMessage::new();
+        msg.set_from_peer(new_peer(3, 0));
+        msg.set_to_peer(new_peer(to, 0));
+        assert_eq!(filter3[0].before(&msg), true);
     }
-    fn message_count(&self, node_id: u64) -> u64 {
-        self.routers.rl()[&node_id]
-    }
-    fn reset(&mut self) {
-        let mut hash = self.routers.wl();
-        for (_, v) in hash.iter_mut() {
-            *v = 0;
-        }
-    }
-}
-
-impl Transport for MockForCheck {
-    fn send(&self, msg: RaftMessage) -> Result<()> {
-        let to = msg.get_to_peer().get_store_id();
-        if let Some(count) = self.routers.wl().get_mut(&to) {
-            *count += 1
-        }
-        Ok(())
-    }
-}
-
-struct Test {
-    check: Arc<RwLock<MockForCheck>>,
-    trans: Vec<SimulateTransport<MockForCheck>>,
-}
-
-impl Test {
-    fn new(node_count: usize) -> Test {
-        let t = Arc::new(RwLock::new(MockForCheck::new(node_count)));
-        let mut trans = vec![];
-        for _ in 0..node_count {
-            let sim_trans = SimulateTransport::new(t.clone());
-            trans.push(sim_trans);
-        }
-        Test {
-            check: t.clone(),
-            trans: trans,
-        }
-    }
-
-    fn reset(&mut self) {
-        self.check.wl().reset();
-        for tran in &mut self.trans {
-            tran.set_filters(vec![]);
-        }
-    }
-
-    fn send_message(&self, from: u64, to: u64) -> Result<()> {
+    // isolate node can't receive message
+    for from in 0..1000 {
         let mut msg = RaftMessage::new();
         msg.set_from_peer(new_peer(from, 0));
-        msg.set_to_peer(new_peer(to, 0));
-        self.trans[from as usize].send(msg)
+        msg.set_to_peer(new_peer(3, 0));
+
+        let filter = filter_factory.generate(from);
+        assert_eq!(filter[0].before(&msg), true);
     }
-
-    fn hook_transport<F: FilterFactory>(&mut self, factory: F) {
-        for i in 0..self.trans.len() {
-            let filters = factory.generate(i as u64);
-            self.trans.get_mut(i).unwrap().set_filters(filters);
-        }
-    }
-
-    fn message_count(&self, node_id: u64) -> u64 {
-        self.check.rl().message_count(node_id)
-    }
-
-    fn assert_msg_count(&self, vec: Vec<u64>) {
-        for (i, item) in vec.iter().enumerate() {
-            assert_eq!(*item, self.message_count(i as u64));
-        }
-    }
-}
-
-#[test]
-fn test_transport_filters() {
-    let mut test = Test::new(5);
-
-    // testcase for isolate
-    test.hook_transport(Isolate::new(3));
-    for _ in 0..1000 {
-        let r = rand::random::<u64>() % 5;
-        let _ = test.send_message(r, 3);
-        let _ = test.send_message(3, r);
-    }
-    test.assert_msg_count(vec![0, 0, 0, 0, 0]);
-    let _ = test.send_message(4, 0);
-    let _ = test.send_message(2, 1);
-    let _ = test.send_message(2, 4);
-    test.assert_msg_count(vec![1, 1, 0, 0, 1]);
-
-    // testcase for partition
-    test.reset();
-    test.hook_transport(Partition::new(vec![0, 1], vec![2, 3, 4]));
-    for _ in 0..1000 {
-        let (s1, s2) = (rand::random::<u64>() % 2, 2 + rand::random::<u64>() % 3);
-        let _ = test.send_message(s1, s2);
-        let _ = test.send_message(s2, s1);
-    }
-    test.assert_msg_count(vec![0, 0, 0, 0, 0]);
-    let _ = test.send_message(4, 3);
-    let _ = test.send_message(4, 2);
-    let _ = test.send_message(3, 2);
-    let _ = test.send_message(2, 4);
-    let _ = test.send_message(0, 1);
-    let _ = test.send_message(1, 0);
-    test.assert_msg_count(vec![1, 1, 2, 1, 1]);
-
-    // testcase for drop packet
-    test.reset();
-    test.hook_transport(DropPacket::new(20));
-    for _ in 0..100000 {
-        let _ = test.send_message(0, 3);
-    }
-    assert!(test.message_count(3) > 70000);
-
-    // testcase for delay
-    test.reset();
-    test.hook_transport(Delay::new(Duration::from_millis(500)));
-    let now = Instant::now();
-    let _ = test.send_message(0, 3);
-    assert!(now.elapsed() > Duration::from_millis(450));
 }
